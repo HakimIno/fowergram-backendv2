@@ -119,7 +119,7 @@ docker-build-dev: ## Build Docker image for development
 
 docker-run: ## Run Docker container
 	@echo "Running Docker container..."
-	@docker run -p 8080:8080 --env-file .env fowergram-backend:latest
+	@docker run -p 8000:8000 --env-file .env fowergram-backend:latest
 
 docker-push: ## Push Docker image to registry
 	@echo "Pushing Docker image..."
@@ -152,7 +152,28 @@ graphql-generate: ## Generate GraphQL code
 
 graphql-introspect: ## Generate GraphQL introspection
 	@echo "Generating GraphQL introspection..."
-	@curl -X POST -H "Content-Type: application/json" -d '{"query":"query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } directives { name description locations args { ...InputValue } } } } fragment FullType on __Type { kind name description fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason } inputFields { ...InputValue } interfaces { ...TypeRef } enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason } possibleTypes { ...TypeRef } } fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue } fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } } }"}' http://localhost:8080/graphql | jq . > schema.json
+	@curl -X POST -H "Content-Type: application/json" -d '{"query":"query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } directives { name description locations args { ...InputValue } } } } fragment FullType on __Type { kind name description fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason } inputFields { ...InputValue } interfaces { ...TypeRef } enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason } possibleTypes { ...TypeRef } } fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue } fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } } }"}' http://localhost:8000/graphql | jq . > schema.json
+
+# API Documentation commands
+docs-serve: ## Serve API documentation locally
+	@echo "Serving API documentation at http://localhost:3000/docs"
+	@python3 -m http.server 3000 --directory api || python -m SimpleHTTPServer 3000
+
+docs-validate: ## Validate OpenAPI specification
+	@echo "Validating OpenAPI specification..."
+	@which swagger > /dev/null || (echo "Installing swagger..." && go install github.com/go-swagger/go-swagger/cmd/swagger@latest)
+	@swagger validate api/openapi.yaml
+
+docs-generate: ## Generate API docs from code annotations
+	@echo "Generating API documentation from code..."
+	@go run scripts/generate-api-docs.go
+
+docs-update: docs-generate docs-validate ## Update and validate API documentation
+	@echo "API documentation updated and validated successfully!"
+
+docs-open: ## Open API documentation in browser
+	@echo "Opening API documentation..."
+	@which open > /dev/null && open http://localhost:3000/docs/stoplight.html || echo "Please visit http://localhost:3000/docs/stoplight.html"
 
 # Monitoring commands
 prometheus-up: ## Start Prometheus
@@ -171,11 +192,11 @@ jaeger-up: ## Start Jaeger
 load-test: ## Run load tests
 	@echo "Running load tests..."
 	@which hey > /dev/null || (echo "Installing hey..." && go install github.com/rakyll/hey@latest)
-	@hey -n 1000 -c 10 http://localhost:8080/health
+	@hey -n 1000 -c 10 http://localhost:8000/health
 
 load-test-graphql: ## Run GraphQL load tests
 	@echo "Running GraphQL load tests..."
-	@hey -n 1000 -c 10 -m POST -H "Content-Type: application/json" -d '{"query":"query { __typename }"}' http://localhost:8080/graphql
+	@hey -n 1000 -c 10 -m POST -H "Content-Type: application/json" -d '{"query":"query { __typename }"}' http://localhost:8000/graphql
 
 # Cleanup commands
 clean: ## Clean build artifacts

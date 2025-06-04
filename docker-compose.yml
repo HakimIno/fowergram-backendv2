@@ -93,26 +93,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # SuperTokens Core
-  supertokens:
-    image: registry.supertokens.io/supertokens/supertokens-postgresql:7.0
-    container_name: fowergram-supertokens
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      POSTGRESQL_CONNECTION_URI: "postgresql://fowergram:password@postgres:5432/fowergram"
-    ports:
-      - "3567:3567"
-    networks:
-      - fowergram-network
-    healthcheck:
-      test: >
-        bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 && echo -e "GET /hello HTTP/1.1\r\nhost: 127.0.0.1:3567\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep "Hello"'
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Prometheus (Monitoring)
   prometheus:
     image: prom/prometheus:latest
@@ -194,7 +174,7 @@ services:
       APP_VERSION: "1.0.0"
       ENVIRONMENT: "development"
       PORT: "8000"
-      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001"
+      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:8000"
       
       # Database
       DATABASE_URL: "postgres://fowergram:password@postgres:5432/fowergram?sslmode=disable"
@@ -212,14 +192,7 @@ services:
       # Messaging
       NATS_URL: "nats://nats:4222"
       
-      # Authentication
-      SUPERTOKENS_CONNECTION_URI: "http://supertokens:3567"
-      SUPERTOKENS_API_KEY: ""
-      SUPERTOKENS_APP_NAME: "Fowergram"
-      SUPERTOKENS_WEBSITE_DOMAIN: "http://localhost:3000"
-      SUPERTOKENS_API_BASE_PATH: "/auth"
-      SUPERTOKENS_WEBSITE_BASE_PATH: "/auth"
-      
+    
       # Observability
       TRACING_ENABLED: "true"
       METRICS_ENABLED: "true"
@@ -234,8 +207,6 @@ services:
       minio:
         condition: service_healthy
       nats:
-        condition: service_healthy
-      supertokens:
         condition: service_healthy
 
 networks:

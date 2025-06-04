@@ -253,7 +253,7 @@ The application uses SuperTokens for authentication with the following features:
 docker build -t fowergram-backend .
 
 # Run container
-docker run -p 8080:8080 \
+docker run -p 8000:8000 \
   -e DATABASE_URL="postgres://..." \
   -e REDIS_URL="redis://..." \
   fowergram-backend
@@ -316,7 +316,7 @@ spec:
       - name: backend
         image: fowergram-backend:latest
         ports:
-        - containerPort: 8080
+        - containerPort: 8000
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -334,7 +334,7 @@ spec:
 | `APP_NAME` | Application name | `fowergram-backend` |
 | `APP_VERSION` | Application version | `1.0.0` |
 | `ENVIRONMENT` | Environment (development/production) | `development` |
-| `PORT` | Server port | `8080` |
+| `PORT` | Server port | `8000` |
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `REDIS_URL` | Redis connection string | Required |
 | `MINIO_ENDPOINT` | MinIO endpoint | `localhost:9000` |

@@ -18,6 +18,7 @@ require (
 	github.com/supertokens/supertokens-golang v0.25.1
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.38.0
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (

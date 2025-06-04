@@ -1,0 +1,186 @@
+package handlers
+
+import (
+	"fowergram-backend/pkg/auth"
+	"fowergram-backend/pkg/logger"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+type AuthHandler struct {
+	authService auth.AuthService
+	logger      logger.Logger
+}
+
+func NewAuthHandler(authService auth.AuthService, logger logger.Logger) *AuthHandler {
+	return &AuthHandler{
+		authService: authService,
+		logger:      logger,
+	}
+}
+
+// SignupRequest represents the signup request payload
+type SignupRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+	Username string `json:"username" validate:"required,min=3,max=50,alphanum"`
+}
+
+// SigninRequest represents the signin request payload
+type SigninRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+// UserResponse represents the user data returned in responses
+type UserResponse struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+}
+
+// SignupResponse represents the signup response
+type SignupResponse struct {
+	User    UserResponse `json:"user"`
+	Message string       `json:"message"`
+}
+
+// SigninResponse represents the signin response
+type SigninResponse struct {
+	User        UserResponse `json:"user"`
+	AccessToken string       `json:"accessToken"`
+	Message     string       `json:"message"`
+}
+
+// ErrorResponse represents an error response
+type ErrorResponse struct {
+	Error   string      `json:"error"`
+	Details interface{} `json:"details,omitempty"`
+}
+
+// Signup handles user registration
+// @Summary User registration
+// @Description Create a new user account
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body SignupRequest true "Signup request"
+// @Success 200 {object} SignupResponse
+// @Failure 400 {object} ErrorResponse
+// @Router /api/auth/signup [post]
+func (h *AuthHandler) Signup(c *fiber.Ctx) error {
+	var req SignupRequest
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Invalid request body",
+		})
+	}
+
+	if req.Email == "" || req.Password == "" || req.Username == "" {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Email, password, and username are required",
+		})
+	}
+
+	user, err := h.authService.CreateUser(c.Context(), req.Email, req.Password, req.Username)
+	if err != nil {
+		h.logger.Error("Failed to create user", "error", err)
+		return c.Status(400).JSON(ErrorResponse{
+			Error: err.Error(),
+		})
+	}
+
+	return c.JSON(SignupResponse{
+		User: UserResponse{
+			ID:       user.ID.String(),
+			Email:    user.Email,
+			Username: req.Username,
+		},
+		Message: "User created successfully",
+	})
+}
+
+// Signin handles user authentication
+// @Summary User login
+// @Description Authenticate user and return access token
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body SigninRequest true "Signin request"
+// @Success 200 {object} SigninResponse
+// @Failure 401 {object} ErrorResponse
+// @Router /api/auth/signin [post]
+func (h *AuthHandler) Signin(c *fiber.Ctx) error {
+	var req SigninRequest
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Invalid request body",
+		})
+	}
+
+	if req.Email == "" || req.Password == "" {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Email and password are required",
+		})
+	}
+
+	user, token, err := h.authService.SignIn(c.Context(), req.Email, req.Password)
+	if err != nil {
+		h.logger.Error("Failed to sign in", "error", err)
+		return c.Status(401).JSON(ErrorResponse{
+			Error: err.Error(),
+		})
+	}
+
+	return c.JSON(SigninResponse{
+		User: UserResponse{
+			ID:    user.ID.String(),
+			Email: user.Email,
+		},
+		AccessToken: token,
+		Message:     "Signed in successfully",
+	})
+}
+
+// Signout handles user logout
+// @Summary User logout
+// @Description Sign out the current user
+// @Tags Authentication
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]string
+// @Router /api/auth/signout [post]
+func (h *AuthHandler) Signout(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"message": "Signed out successfully",
+	})
+}
+
+// Me returns the current user information
+// @Summary Get current user
+// @Description Get the currently authenticated user's information
+// @Tags Authentication
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]UserResponse
+// @Failure 401 {object} ErrorResponse
+// @Router /api/auth/me [get]
+func (h *AuthHandler) Me(c *fiber.Ctx) error {
+	// Get user directly from Fiber context locals
+	user, ok := c.Locals("user").(*auth.User)
+	if !ok {
+		return c.Status(401).JSON(ErrorResponse{
+			Error: "Not authenticated",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"user": UserResponse{
+			ID:       user.ID.String(),
+			Email:    user.Email,
+			Username: user.Username,
+		},
+	})
+}

@@ -10,18 +10,18 @@ import (
 
 	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
 
 	"fowergram-backend/internal/config"
 	"fowergram-backend/internal/domain/post"
 	"fowergram-backend/internal/domain/user"
 	"fowergram-backend/internal/graphql"
+	"fowergram-backend/internal/handlers"
 	"fowergram-backend/internal/infra/cache"
 	"fowergram-backend/internal/infra/database"
 	"fowergram-backend/internal/infra/messaging"
 	"fowergram-backend/internal/infra/storage"
+	"fowergram-backend/internal/routes"
 	"fowergram-backend/pkg/auth"
 	"fowergram-backend/pkg/logger"
 	"fowergram-backend/pkg/telemetry"
@@ -100,6 +100,11 @@ func main() {
 	// Initialize GraphQL server
 	gqlServer := graphql.NewServer(userService, postService, authService, logger)
 
+	// Initialize handlers
+	authHandler := handlers.NewAuthHandler(authService, logger)
+	healthHandler := handlers.NewHealthHandler(cfg.AppVersion)
+	postHandler := handlers.NewPostHandler(postService, logger)
+
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		EnableTrustedProxyCheck: true,
@@ -109,122 +114,21 @@ func main() {
 		IdleTimeout:             120 * time.Second,
 	})
 
-	// Middleware
-	app.Use(recover.New())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     cfg.AllowedOrigins,
-		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Requested-With",
-		AllowCredentials: true,
-	}))
-
-	// Health check endpoint
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":    "healthy",
-			"timestamp": time.Now().UTC(),
-			"version":   cfg.AppVersion,
-		})
+	// Setup routes
+	routes.SetupRoutes(app, routes.Config{
+		AuthHandler:    authHandler,
+		HealthHandler:  healthHandler,
+		PostHandler:    postHandler,
+		AuthService:    authService,
+		GQLHandler:     adaptor.HTTPHandler(gqlServer),
+		MetricsHandler: adaptor.HTTPHandler(telemetry.PrometheusHandler()),
+		AllowedOrigins: cfg.AllowedOrigins,
 	})
 
-	// SuperTokens middleware setup
-	app.Use(authService.Middleware())
-
-	// Authentication REST API endpoints
-	app.Post("/api/auth/signup", func(c *fiber.Ctx) error {
-		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-			Username string `json:"username"`
-		}
-
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-		}
-
-		if req.Email == "" || req.Password == "" || req.Username == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Email, password, and username are required"})
-		}
-
-		user, err := authService.CreateUser(c.Context(), req.Email, req.Password, req.Username)
-		if err != nil {
-			logger.Error("Failed to create user", "error", err)
-			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		return c.JSON(fiber.Map{
-			"user": fiber.Map{
-				"id":       user.ID.String(),
-				"email":    user.Email,
-				"username": req.Username,
-			},
-			"message": "User created successfully",
-		})
-	})
-
-	app.Post("/api/auth/signin", func(c *fiber.Ctx) error {
-		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-		}
-
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
-		}
-
-		if req.Email == "" || req.Password == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "Email and password are required"})
-		}
-
-		user, token, err := authService.SignIn(c.Context(), req.Email, req.Password)
-		if err != nil {
-			logger.Error("Failed to sign in", "error", err)
-			return c.Status(401).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		return c.JSON(fiber.Map{
-			"user": fiber.Map{
-				"id":    user.ID.String(),
-				"email": user.Email,
-			},
-			"accessToken": token,
-			"message":     "Signed in successfully",
-		})
-	})
-
-	app.Post("/api/auth/signout", func(c *fiber.Ctx) error {
-		// SuperTokens handles signout via session management
-		return c.JSON(fiber.Map{
-			"message": "Signed out successfully",
-		})
-	})
-
-	app.Get("/api/auth/me", func(c *fiber.Ctx) error {
-		// Get user directly from Fiber context locals
-		user, ok := c.Locals("user").(*auth.User)
-		if !ok {
-			return c.Status(401).JSON(fiber.Map{"error": "Not authenticated"})
-		}
-
-		return c.JSON(fiber.Map{
-			"user": fiber.Map{
-				"id":       user.ID.String(),
-				"email":    user.Email,
-				"username": user.Username,
-			},
-		})
-	})
-
-	// GraphQL endpoint
-	app.All("/graphql", adaptor.HTTPHandler(gqlServer))
-
-	// GraphQL playground (development only)
+	// Setup development routes if in development mode
 	if cfg.Environment == "development" {
-		app.Get("/playground", adaptor.HTTPHandler(graphql.NewPlayground("/graphql")))
+		routes.SetupDevelopmentRoutes(app, adaptor.HTTPHandler(graphql.NewPlayground("/graphql")))
 	}
-
-	// Metrics endpoint for Prometheus
-	app.Get("/metrics", adaptor.HTTPHandler(telemetry.PrometheusHandler()))
 
 	// Graceful shutdown
 	c := make(chan os.Signal, 1)
@@ -245,7 +149,7 @@ func main() {
 	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8000"
 	}
 
 	logger.Info("Starting server", "port", port, "environment", cfg.Environment)
