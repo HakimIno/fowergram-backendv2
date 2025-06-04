@@ -27,6 +27,32 @@ servers:
     description: Production server
 
 paths:
+  /:
+    get:
+      tags:
+        - Documentation
+      summary: Root redirect to documentation
+      description: Redirects to API documentation
+      operationId: rootRedirect
+      responses:
+        '302':
+          description: Redirect to documentation
+
+  /docs:
+    get:
+      tags:
+        - Documentation
+      summary: API Documentation
+      description: Interactive API documentation using Stoplight Elements
+      operationId: apiDocs
+      responses:
+        '200':
+          description: API documentation interface
+          content:
+            text/html:
+              schema:
+                type: string
+
   /health:
     get:
       tags:
@@ -40,17 +66,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: healthy
-                  timestamp:
-                    type: string
-                    format: date-time
-                  version:
-                    type: string
-                    example: 1.0.0
+                $ref: '#/components/schemas/HealthResponse'
 
   /api/auth/signup:
     post:
@@ -163,6 +179,357 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/auth/verify-email:
+    post:
+      tags:
+        - Authentication
+      summary: Verify email address
+      description: Verify user's email address using verification token
+      operationId: verifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+            examples:
+              example1:
+                summary: Valid verification request
+                value:
+                  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        '200':
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Email verified successfully
+        '400':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/request-password-reset:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset
+      description: Send password reset email to user
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestPasswordResetRequest'
+            examples:
+              example1:
+                summary: Valid password reset request
+                value:
+                  email: user@example.com
+      responses:
+        '200':
+          description: Password reset email sent (if email exists)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: If your email is registered, you will receive a password reset link
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - Authentication
+      summary: Reset password
+      description: Reset user's password using reset token
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+            examples:
+              example1:
+                summary: Valid password reset
+                value:
+                  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  password: newSecurePassword123
+      responses:
+        '200':
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Password reset successfully
+        '400':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/posts:
+    get:
+      tags:
+        - Posts
+      summary: Get posts list
+      description: Retrieve a paginated list of posts
+      operationId: getPosts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: page_size
+          in: query
+          description: Number of posts per page
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+        - name: author_id
+          in: query
+          description: Filter posts by author ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tag
+          in: query
+          description: Filter posts by tag
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of posts retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags:
+        - Posts
+      summary: Create a new post
+      description: Create a new post with title, content, and optional media
+      operationId: createPost
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePostRequest'
+            examples:
+              example1:
+                summary: Simple text post
+                value:
+                  title: "My first post"
+                  content: "This is my first post on Fowergram!"
+                  tags: ["firstpost", "hello"]
+                  is_private: false
+              example2:
+                summary: Post with media and location
+                value:
+                  title: "Beautiful sunset"
+                  content: "Amazing sunset at the beach today"
+                  media_files: ["sunset1.jpg", "sunset2.jpg"]
+                  tags: ["sunset", "beach", "nature"]
+                  location: "Malibu Beach, CA"
+                  caption: "Perfect evening 🌅"
+                  is_private: false
+      responses:
+        '201':
+          description: Post created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/posts/{id}:
+    get:
+      tags:
+        - Posts
+      summary: Get post by ID
+      description: Retrieve a specific post by its ID
+      operationId: getPost
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Post ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Post retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '404':
+          description: Post not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Posts
+      summary: Update post
+      description: Update an existing post by ID
+      operationId: updatePost
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Post ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePostRequest'
+            examples:
+              example1:
+                summary: Update title and content
+                value:
+                  title: "Updated post title"
+                  content: "Updated post content"
+                  tags: ["updated", "modified"]
+      responses:
+        '200':
+          description: Post updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized to update this post
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Post not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Posts
+      summary: Delete post
+      description: Delete a post by ID
+      operationId: deletePost
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Post ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Post deleted successfully
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized to delete this post
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Post not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /graphql:
     post:
       tags:
@@ -177,31 +544,52 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                query:
-                  type: string
-                  description: GraphQL query string
-                variables:
-                  type: object
-                  description: Variables for the GraphQL query
-                operationName:
-                  type: string
-                  description: Name of the operation (for multiple operations)
+              $ref: '#/components/schemas/GraphQLRequest'
+            examples:
+              query_example:
+                summary: Query example
+                value:
+                  query: |
+                    query GetUser($id: ID!) {
+                      user(id: $id) {
+                        id
+                        email
+                        username
+                        posts {
+                          id
+                          title
+                          content
+                        }
+                      }
+                    }
+                  variables:
+                    id: "123e4567-e89b-12d3-a456-426614174000"
+              mutation_example:
+                summary: Mutation example
+                value:
+                  query: |
+                    mutation CreatePost($input: CreatePostInput!) {
+                      createPost(input: $input) {
+                        id
+                        title
+                        content
+                        author {
+                          id
+                          username
+                        }
+                      }
+                    }
+                  variables:
+                    input:
+                      title: "My GraphQL Post"
+                      content: "Created via GraphQL"
       responses:
         '200':
           description: GraphQL response
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    type: object
-                  errors:
-                    type: array
-                    items:
-                      type: object
+                $ref: '#/components/schemas/GraphQLResponse'
 
   /playground:
     get:
@@ -241,6 +629,19 @@ components:
       bearerFormat: JWT
 
   schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: 1.0.0
+
     SignupRequest:
       type: object
       required:
@@ -256,14 +657,14 @@ components:
         password:
           type: string
           minLength: 8
-          description: User's password
+          description: User's password (minimum 8 characters)
           example: securePassword123
         username:
           type: string
           minLength: 3
           maxLength: 50
           pattern: '^[a-zA-Z0-9_]+$'
-          description: Unique username
+          description: Unique username (alphanumeric and underscore only)
           example: johndoe
 
     SignupResponse:
@@ -297,6 +698,7 @@ components:
         accessToken:
           type: string
           description: JWT access token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
         message:
           type: string
           example: Signed in successfully
@@ -324,6 +726,246 @@ components:
           type: string
           description: User's username
           example: johndoe
+
+    VerifyEmailRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: Email verification token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    RequestPasswordResetRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email address for password reset
+          example: user@example.com
+
+    ResetPasswordRequest:
+      type: object
+      required:
+        - token
+        - password
+      properties:
+        token:
+          type: string
+          description: Password reset token
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        password:
+          type: string
+          minLength: 8
+          description: New password (minimum 8 characters)
+          example: newSecurePassword123
+
+    CreatePostRequest:
+      type: object
+      required:
+        - title
+        - content
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Post title
+          example: "My first post"
+        content:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Post content
+          example: "This is my first post on Fowergram!"
+        media_files:
+          type: array
+          items:
+            type: string
+          description: Array of media file URLs
+          example: ["image1.jpg", "image2.jpg"]
+        tags:
+          type: array
+          items:
+            type: string
+          description: Array of tags
+          example: ["firstpost", "hello"]
+        is_private:
+          type: boolean
+          description: Whether the post is private
+          default: false
+        location:
+          type: string
+          description: Location where the post was created
+          example: "Malibu Beach, CA"
+        caption:
+          type: string
+          description: Post caption
+          example: "Perfect evening 🌅"
+
+    UpdatePostRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Updated post title
+          example: "Updated post title"
+        content:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Updated post content
+          example: "Updated post content"
+        tags:
+          type: array
+          items:
+            type: string
+          description: Updated array of tags
+          example: ["updated", "modified"]
+        is_private:
+          type: boolean
+          description: Whether the post is private
+        caption:
+          type: string
+          description: Updated post caption
+          example: "Updated caption"
+
+    PostResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Post ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+        title:
+          type: string
+          description: Post title
+          example: "My first post"
+        content:
+          type: string
+          description: Post content
+          example: "This is my first post on Fowergram!"
+        media_files:
+          type: array
+          items:
+            type: string
+          description: Array of media file URLs
+          example: ["image1.jpg", "image2.jpg"]
+        tags:
+          type: array
+          items:
+            type: string
+          description: Array of tags
+          example: ["firstpost", "hello"]
+        is_private:
+          type: boolean
+          description: Whether the post is private
+          example: false
+        location:
+          type: string
+          description: Location where the post was created
+          example: "Malibu Beach, CA"
+        caption:
+          type: string
+          description: Post caption
+          example: "Perfect evening 🌅"
+        author_id:
+          type: string
+          format: uuid
+          description: Author's user ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+        likes_count:
+          type: integer
+          description: Number of likes
+          example: 42
+        comments_count:
+          type: integer
+          description: Number of comments
+          example: 5
+        created_at:
+          type: string
+          format: date-time
+          description: Post creation timestamp
+          example: "2024-01-01T00:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Post last update timestamp
+          example: "2024-01-01T01:00:00Z"
+
+    PostListResponse:
+      type: object
+      properties:
+        posts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostResponse'
+          description: Array of posts
+        total_count:
+          type: integer
+          description: Total number of posts matching the query
+          example: 100
+        page:
+          type: integer
+          description: Current page number
+          example: 1
+        page_size:
+          type: integer
+          description: Number of posts per page
+          example: 10
+        has_more:
+          type: boolean
+          description: Whether there are more posts available
+          example: true
+
+    GraphQLRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: GraphQL query string
+          example: "query { user(id: \"123\") { id email username } }"
+        variables:
+          type: object
+          description: Variables for the GraphQL query
+          example:
+            id: "123e4567-e89b-12d3-a456-426614174000"
+        operationName:
+          type: string
+          description: Name of the operation (for multiple operations)
+          example: "GetUser"
+
+    GraphQLResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          description: GraphQL response data
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              message:
+                type: string
+              locations:
+                type: array
+                items:
+                  type: object
+              path:
+                type: array
+                items:
+                  type: string
+          description: GraphQL errors if any
 
     ErrorResponse:
       type: object

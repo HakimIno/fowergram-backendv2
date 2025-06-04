@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -13,34 +14,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
-
-// JWTAuth implements Instagram-style JWT-based authentication
-type JWTAuth struct {
-	jwtSecret     []byte
-	accessExpiry  time.Duration
-	refreshExpiry time.Duration
-	userRepo      UserRepository
-}
-
-// UserRepository interface for user data operations
-type UserRepository interface {
-	CreateUser(ctx context.Context, user *User) error
-	GetUserByEmail(ctx context.Context, email string) (*User, error)
-	GetUserByUsername(ctx context.Context, username string) (*User, error)
-	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
-	UpdateUser(ctx context.Context, user *User) error
-	UpdatePassword(ctx context.Context, userID uuid.UUID, hashedPassword string) error
-	StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error
-	ValidateRefreshToken(ctx context.Context, tokenHash string) (*User, error)
-	RevokeRefreshToken(ctx context.Context, tokenHash string) error
-}
-
-// JWTConfig holds JWT configuration
-type JWTConfig struct {
-	Secret        string
-	AccessExpiry  time.Duration
-	RefreshExpiry time.Duration
-}
 
 // Claims represents JWT claims
 type Claims struct {
@@ -57,13 +30,25 @@ type RefreshClaims struct {
 	jwt.RegisteredClaims
 }
 
+// JWTAuth implements JWT-based authentication
+type JWTAuth struct {
+	secretKey        []byte
+	accessTokenTTL   time.Duration
+	refreshTokenTTL  time.Duration
+	userRepo         UserRepository
+	verificationRepo VerificationRepository
+	emailService     EmailService
+}
+
 // NewJWTAuth creates a new JWT authentication service
-func NewJWTAuth(config JWTConfig, userRepo UserRepository) *JWTAuth {
+func NewJWTAuth(secretKey string, accessTokenTTL, refreshTokenTTL time.Duration, userRepo UserRepository, verificationRepo VerificationRepository, emailService EmailService) *JWTAuth {
 	return &JWTAuth{
-		jwtSecret:     []byte(config.Secret),
-		accessExpiry:  config.AccessExpiry,
-		refreshExpiry: config.RefreshExpiry,
-		userRepo:      userRepo,
+		secretKey:        []byte(secretKey),
+		accessTokenTTL:   accessTokenTTL,
+		refreshTokenTTL:  refreshTokenTTL,
+		userRepo:         userRepo,
+		verificationRepo: verificationRepo,
+		emailService:     emailService,
 	}
 }
 
@@ -131,7 +116,7 @@ func (j *JWTAuth) SignIn(ctx context.Context, email, password string) (*User, st
 	}
 
 	// Store refresh token in database
-	expiresAt := time.Now().Add(j.refreshExpiry)
+	expiresAt := time.Now().Add(j.refreshTokenTTL)
 	if err := j.userRepo.StoreRefreshToken(ctx, user.ID, tokenHash, expiresAt); err != nil {
 		return nil, "", fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -139,14 +124,14 @@ func (j *JWTAuth) SignIn(ctx context.Context, email, password string) (*User, st
 	// Remove password from response
 	user.HashedPassword = ""
 
-	// Return access token (refresh token would be set as httpOnly cookie in real app)
+	// Return access token
 	return user, accessToken, nil
 }
 
 // SignOut revokes refresh token
-func (j *JWTAuth) SignOut(ctx context.Context, refreshToken string) error {
+func (j *JWTAuth) SignOut(ctx context.Context, sessionHandle string) error {
 	// Parse refresh token to get token hash
-	claims, err := j.parseRefreshToken(refreshToken)
+	claims, err := j.parseRefreshToken(sessionHandle)
 	if err != nil {
 		return err
 	}
@@ -214,93 +199,132 @@ func (j *JWTAuth) GetUserFromContext(ctx context.Context) (*User, error) {
 	return nil, ErrUnauthorized
 }
 
-// generateAccessToken creates a new access token
-func (j *JWTAuth) generateAccessToken(user *User) (string, error) {
-	expirationTime := time.Now().Add(j.accessExpiry)
-
-	claims := &Claims{
-		UserID:   user.ID,
-		Email:    user.Email,
-		Username: user.Username,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   user.ID.String(),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(j.jwtSecret)
-}
-
-// generateRefreshToken creates a new refresh token
-func (j *JWTAuth) generateRefreshToken(user *User) (string, string, error) {
-	// Generate random token hash
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", "", err
-	}
-	tokenHash := hex.EncodeToString(randomBytes)
-
-	expirationTime := time.Now().Add(j.refreshExpiry)
-
-	claims := &RefreshClaims{
-		UserID:    user.ID,
-		TokenHash: tokenHash,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   user.ID.String(),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(j.jwtSecret)
-	return tokenString, tokenHash, err
-}
-
-// parseAccessToken parses and validates access token
-func (j *JWTAuth) parseAccessToken(tokenString string) (*Claims, error) {
-	claims := &Claims{}
-
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return j.jwtSecret, nil
-	})
-
+// DeleteUser deactivates user account (soft delete)
+func (j *JWTAuth) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	user, err := j.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid token: %w", err)
+		return err
 	}
 
-	if !token.Valid {
-		return nil, fmt.Errorf("invalid token")
-	}
+	user.IsActive = false
+	user.UpdatedAt = time.Now()
 
-	return claims, nil
+	return j.userRepo.UpdateUser(ctx, user)
 }
 
-// parseRefreshToken parses and validates refresh token
-func (j *JWTAuth) parseRefreshToken(tokenString string) (*RefreshClaims, error) {
-	claims := &RefreshClaims{}
+// UpdateUserMetadata updates user metadata
+func (j *JWTAuth) UpdateUserMetadata(ctx context.Context, userID uuid.UUID, metadata map[string]interface{}) error {
+	return fmt.Errorf("not implemented")
+}
 
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return j.jwtSecret, nil
-	})
-
+// VerifyEmail verifies user's email using verification token
+func (j *JWTAuth) VerifyEmail(ctx context.Context, token string) error {
+	user, err := j.verificationRepo.ValidateVerificationToken(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("invalid refresh token: %w", err)
+		return fmt.Errorf("failed to validate verification token: %w", err)
 	}
 
-	if !token.Valid {
-		return nil, fmt.Errorf("invalid refresh token")
+	if user.IsVerified {
+		return &AuthError{Code: "EMAIL_ALREADY_VERIFIED", Message: "Email already verified"}
 	}
 
-	return claims, nil
+	if err := j.verificationRepo.MarkEmailVerified(ctx, user.ID); err != nil {
+		return fmt.Errorf("failed to mark email as verified: %w", err)
+	}
+
+	return nil
+}
+
+// SendVerificationEmail sends an email verification link
+func (j *JWTAuth) SendVerificationEmail(ctx context.Context, email string) error {
+	user, err := j.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if user.IsVerified {
+		return &AuthError{Code: "EMAIL_ALREADY_VERIFIED", Message: "Email already verified"}
+	}
+
+	// Generate verification token
+	token := make([]byte, 32)
+	if _, err := rand.Read(token); err != nil {
+		return fmt.Errorf("failed to generate token: %w", err)
+	}
+	tokenStr := base64.URLEncoding.EncodeToString(token)
+
+	// Store token
+	expiresAt := time.Now().Add(24 * time.Hour)
+	if err := j.verificationRepo.StoreVerificationToken(ctx, user.ID, tokenStr, expiresAt); err != nil {
+		return fmt.Errorf("failed to store verification token: %w", err)
+	}
+
+	// Send email
+	if err := j.emailService.SendVerificationEmail(ctx, user.Email, tokenStr); err != nil {
+		return fmt.Errorf("failed to send verification email: %w", err)
+	}
+
+	return nil
+}
+
+// RequestPasswordReset sends a password reset email
+func (j *JWTAuth) RequestPasswordReset(ctx context.Context, email string) error {
+	user, err := j.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		// Don't expose whether email exists or not
+		return nil
+	}
+
+	// Generate reset token
+	token := make([]byte, 32)
+	if _, err := rand.Read(token); err != nil {
+		return fmt.Errorf("failed to generate token: %w", err)
+	}
+	tokenStr := base64.URLEncoding.EncodeToString(token)
+
+	// Store token
+	expiresAt := time.Now().Add(1 * time.Hour)
+	if err := j.verificationRepo.StorePasswordResetToken(ctx, user.ID, tokenStr, expiresAt); err != nil {
+		return fmt.Errorf("failed to store password reset token: %w", err)
+	}
+
+	// Send email
+	if err := j.emailService.SendPasswordResetEmail(ctx, user.Email, tokenStr); err != nil {
+		return fmt.Errorf("failed to send password reset email: %w", err)
+	}
+
+	return nil
+}
+
+// ResetPassword resets a user's password
+func (j *JWTAuth) ResetPassword(ctx context.Context, token, newPassword string) error {
+	user, err := j.verificationRepo.ValidatePasswordResetToken(ctx, token)
+	if err != nil {
+		return fmt.Errorf("failed to validate password reset token: %w", err)
+	}
+
+	// Hash new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Update password
+	if err := j.userRepo.UpdatePassword(ctx, user.ID, string(hashedPassword)); err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+
+	// Revoke token
+	if err := j.verificationRepo.RevokePasswordResetToken(ctx, token); err != nil {
+		return fmt.Errorf("failed to revoke password reset token: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes any resources used by the auth service
+func (j *JWTAuth) Close() error {
+	return nil
 }
 
 // Middleware returns Fiber middleware for JWT authentication
@@ -309,7 +333,9 @@ func (j *JWTAuth) Middleware() fiber.Handler {
 		// Skip auth for health check and public endpoints
 		path := c.Path()
 		if path == "/health" || path == "/metrics" || path == "/playground" ||
-			path == "/api/auth/signup" || path == "/api/auth/signin" {
+			path == "/api/auth/signup" || path == "/api/auth/signin" ||
+			path == "/api/auth/verify-email" || path == "/api/auth/request-password-reset" ||
+			path == "/api/auth/reset-password" {
 			return c.Next()
 		}
 
@@ -332,68 +358,98 @@ func (j *JWTAuth) Middleware() fiber.Handler {
 		}
 
 		// Set user in context
-		c.Context().SetUserValue("user", user)
+		c.Locals("user", user)
 		return c.Next()
 	}
 }
 
-// Instagram-style methods
+// Helper methods
 
-// UpdatePassword updates user password
-func (j *JWTAuth) UpdatePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error {
-	user, err := j.userRepo.GetUserByID(ctx, userID)
+// generateAccessToken creates a new access token
+func (j *JWTAuth) generateAccessToken(user *User) (string, error) {
+	expirationTime := time.Now().Add(j.accessTokenTTL)
+
+	claims := &Claims{
+		UserID:   user.ID,
+		Email:    user.Email,
+		Username: user.Username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   user.ID.String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(j.secretKey)
+}
+
+// generateRefreshToken creates a new refresh token
+func (j *JWTAuth) generateRefreshToken(user *User) (string, string, error) {
+	// Generate random token hash
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", "", err
+	}
+	tokenHash := hex.EncodeToString(randomBytes)
+
+	expirationTime := time.Now().Add(j.refreshTokenTTL)
+
+	claims := &RefreshClaims{
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   user.ID.String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(j.secretKey)
+	return tokenString, tokenHash, err
+}
+
+// parseAccessToken parses and validates access token
+func (j *JWTAuth) parseAccessToken(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return j.secretKey, nil
+	})
+
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("invalid token: %w", err)
 	}
 
-	// Verify old password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.HashedPassword), []byte(oldPassword)); err != nil {
-		return ErrInvalidCredentials
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Hash new password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	return claims, nil
+}
+
+// parseRefreshToken parses and validates refresh token
+func (j *JWTAuth) parseRefreshToken(tokenString string) (*RefreshClaims, error) {
+	claims := &RefreshClaims{}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return j.secretKey, nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", err)
+		return nil, fmt.Errorf("invalid refresh token: %w", err)
 	}
 
-	return j.userRepo.UpdatePassword(ctx, userID, string(hashedPassword))
-}
-
-// DeleteUser deactivates user account (Instagram style - soft delete)
-func (j *JWTAuth) DeleteUser(ctx context.Context, userID uuid.UUID) error {
-	user, err := j.userRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		return err
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid refresh token")
 	}
 
-	user.IsActive = false
-	user.UpdatedAt = time.Now()
-
-	return j.userRepo.UpdateUser(ctx, user)
-}
-
-// Additional methods to satisfy interface
-func (j *JWTAuth) UpdateUserMetadata(ctx context.Context, userID uuid.UUID, metadata map[string]interface{}) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (j *JWTAuth) SendPasswordResetEmail(ctx context.Context, email string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (j *JWTAuth) ResetPassword(ctx context.Context, resetToken, newPassword string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (j *JWTAuth) EnableMFA(ctx context.Context, userID uuid.UUID) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (j *JWTAuth) DisableMFA(ctx context.Context, userID uuid.UUID) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (j *JWTAuth) Close() error {
-	return nil
+	return claims, nil
 }

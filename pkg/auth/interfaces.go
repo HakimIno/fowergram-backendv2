@@ -40,7 +40,6 @@ type RefreshToken struct {
 }
 
 // AuthService defines the interface for authentication services
-// This abstraction allows switching between SuperTokens, Keycloak, or custom JWT implementations
 type AuthService interface {
 	// Middleware returns Fiber middleware for authentication
 	Middleware() fiber.Handler
@@ -69,20 +68,48 @@ type AuthService interface {
 	// UpdateUserMetadata updates user metadata
 	UpdateUserMetadata(ctx context.Context, userID uuid.UUID, metadata map[string]interface{}) error
 
-	// SendPasswordResetEmail sends a password reset email
-	SendPasswordResetEmail(ctx context.Context, email string) error
+	// Email verification
+	VerifyEmail(ctx context.Context, token string) error
+	SendVerificationEmail(ctx context.Context, email string) error
 
-	// ResetPassword resets a user's password using a reset token
-	ResetPassword(ctx context.Context, resetToken, newPassword string) error
-
-	// EnableMFA enables multi-factor authentication for a user
-	EnableMFA(ctx context.Context, userID uuid.UUID) error
-
-	// DisableMFA disables multi-factor authentication for a user
-	DisableMFA(ctx context.Context, userID uuid.UUID) error
+	// Password reset
+	RequestPasswordReset(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token, newPassword string) error
 
 	// Close closes any resources used by the auth service
 	Close() error
+}
+
+// UserRepository defines the interface for user data operations
+type UserRepository interface {
+	CreateUser(ctx context.Context, user *User) error
+	GetUserByEmail(ctx context.Context, email string) (*User, error)
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	UpdateUser(ctx context.Context, user *User) error
+	UpdatePassword(ctx context.Context, userID uuid.UUID, hashedPassword string) error
+	UpdateLastLogin(ctx context.Context, userID uuid.UUID) error
+	StoreRefreshToken(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error
+	ValidateRefreshToken(ctx context.Context, tokenHash string) (*User, error)
+	RevokeRefreshToken(ctx context.Context, tokenHash string) error
+	GetFollowers(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*User, error)
+	GetFollowing(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*User, error)
+}
+
+// VerificationRepository defines the interface for email verification and password reset operations
+type VerificationRepository interface {
+	StoreVerificationToken(ctx context.Context, userID uuid.UUID, token string, expiresAt time.Time) error
+	ValidateVerificationToken(ctx context.Context, token string) (*User, error)
+	MarkEmailVerified(ctx context.Context, userID uuid.UUID) error
+	StorePasswordResetToken(ctx context.Context, userID uuid.UUID, token string, expiresAt time.Time) error
+	ValidatePasswordResetToken(ctx context.Context, token string) (*User, error)
+	RevokePasswordResetToken(ctx context.Context, token string) error
+}
+
+// EmailService defines the interface for email operations
+type EmailService interface {
+	SendVerificationEmail(ctx context.Context, email, token string) error
+	SendPasswordResetEmail(ctx context.Context, email, token string) error
 }
 
 // Provider represents different authentication providers
@@ -112,4 +139,6 @@ var (
 	ErrInvalidToken       = &AuthError{Code: "INVALID_TOKEN", Message: "Invalid or expired token"}
 	ErrUnauthorized       = &AuthError{Code: "UNAUTHORIZED", Message: "Unauthorized access"}
 	ErrSessionExpired     = &AuthError{Code: "SESSION_EXPIRED", Message: "Session has expired"}
+	ErrEmailNotVerified   = &AuthError{Code: "EMAIL_NOT_VERIFIED", Message: "Email not verified"}
+	ErrInvalidResetToken  = &AuthError{Code: "INVALID_RESET_TOKEN", Message: "Invalid or expired reset token"}
 )

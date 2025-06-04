@@ -17,11 +17,9 @@ type postgresRepository struct {
 	db *pgxpool.Pool
 }
 
-// NewRepository creates a new user repository
-func NewRepository(db *pgxpool.Pool) Repository {
-	return &postgresRepository{
-		db: db,
-	}
+// NewPostgresRepository creates a new PostgreSQL user repository
+func NewPostgresRepository(db *pgxpool.Pool) auth.UserRepository {
+	return &postgresRepository{db: db}
 }
 
 // CreateUser creates a new user in the database

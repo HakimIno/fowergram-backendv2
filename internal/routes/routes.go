@@ -3,6 +3,7 @@ package routes
 import (
 	"fowergram-backend/internal/handlers"
 	"fowergram-backend/pkg/auth"
+	"fowergram-backend/pkg/middleware"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -18,6 +19,7 @@ type Config struct {
 	GQLHandler     fiber.Handler
 	MetricsHandler fiber.Handler
 	AllowedOrigins string
+	RateLimiter    *middleware.RateLimiter
 }
 
 // SetupRoutes configures all application routes
@@ -50,9 +52,16 @@ func SetupRoutes(app *fiber.App, cfg Config) {
 
 	// Authentication routes
 	auth := api.Group("/auth")
-	auth.Post("/signup", cfg.AuthHandler.Signup)
-	auth.Post("/signin", cfg.AuthHandler.Signin)
+
+	// Public auth routes with rate limiting
+	auth.Post("/signup", cfg.RateLimiter.Middleware(), cfg.AuthHandler.Signup)
+	auth.Post("/signin", cfg.RateLimiter.Middleware(), cfg.AuthHandler.Signin)
 	auth.Post("/signout", cfg.AuthHandler.Signout)
+
+	// Email verification routes
+	auth.Post("/verify-email", cfg.RateLimiter.Middleware(), cfg.AuthHandler.VerifyEmail)
+	auth.Post("/request-password-reset", cfg.RateLimiter.Middleware(), cfg.AuthHandler.RequestPasswordReset)
+	auth.Post("/reset-password", cfg.RateLimiter.Middleware(), cfg.AuthHandler.ResetPassword)
 
 	// Protected routes
 	protected := api.Group("/auth")
@@ -71,10 +80,14 @@ func SetupRoutes(app *fiber.App, cfg Config) {
 	}
 
 	// GraphQL endpoint
-	app.All("/graphql", cfg.GQLHandler)
+	if cfg.GQLHandler != nil {
+		app.Post("/graphql", cfg.GQLHandler)
+	}
 
-	// Metrics endpoint for Prometheus
-	app.Get("/metrics", cfg.MetricsHandler)
+	// Metrics endpoint
+	if cfg.MetricsHandler != nil {
+		app.Get("/metrics", cfg.MetricsHandler)
+	}
 }
 
 // SetupDevelopmentRoutes adds development-only routes

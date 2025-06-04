@@ -2,20 +2,23 @@ package handlers
 
 import (
 	"fowergram-backend/pkg/auth"
+	"fowergram-backend/pkg/email"
 	"fowergram-backend/pkg/logger"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 type AuthHandler struct {
-	authService auth.AuthService
-	logger      logger.Logger
+	authService  auth.AuthService
+	emailService email.EmailService
+	logger       logger.Logger
 }
 
-func NewAuthHandler(authService auth.AuthService, logger logger.Logger) *AuthHandler {
+func NewAuthHandler(authService auth.AuthService, emailService email.EmailService, logger logger.Logger) *AuthHandler {
 	return &AuthHandler{
-		authService: authService,
-		logger:      logger,
+		authService:  authService,
+		emailService: emailService,
+		logger:       logger,
 	}
 }
 
@@ -56,6 +59,22 @@ type SigninResponse struct {
 type ErrorResponse struct {
 	Error   string      `json:"error"`
 	Details interface{} `json:"details,omitempty"`
+}
+
+// VerifyEmailRequest represents the email verification request
+type VerifyEmailRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// RequestPasswordResetRequest represents the password reset request
+type RequestPasswordResetRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ResetPasswordRequest represents the password reset request
+type ResetPasswordRequest struct {
+	Token    string `json:"token" validate:"required"`
+	Password string `json:"password" validate:"required,min=8"`
 }
 
 // Signup handles user registration
@@ -182,5 +201,96 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 			Email:    user.Email,
 			Username: user.Username,
 		},
+	})
+}
+
+// VerifyEmail handles email verification
+// @Summary Verify email address
+// @Description Verify user's email address using verification token
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body VerifyEmailRequest true "Verification request"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} ErrorResponse
+// @Router /api/auth/verify-email [post]
+func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
+	var req VerifyEmailRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Invalid request body",
+		})
+	}
+
+	if err := h.authService.VerifyEmail(c.Context(), req.Token); err != nil {
+		h.logger.Error("Failed to verify email", "error", err)
+		return c.Status(400).JSON(ErrorResponse{
+			Error: err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Email verified successfully",
+	})
+}
+
+// RequestPasswordReset handles password reset request
+// @Summary Request password reset
+// @Description Send password reset email to user
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body RequestPasswordResetRequest true "Password reset request"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} ErrorResponse
+// @Router /api/auth/request-password-reset [post]
+func (h *AuthHandler) RequestPasswordReset(c *fiber.Ctx) error {
+	var req RequestPasswordResetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Invalid request body",
+		})
+	}
+
+	if err := h.authService.RequestPasswordReset(c.Context(), req.Email); err != nil {
+		h.logger.Error("Failed to request password reset", "error", err)
+		// Don't expose whether email exists or not
+		return c.JSON(fiber.Map{
+			"message": "If your email is registered, you will receive a password reset link",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "If your email is registered, you will receive a password reset link",
+	})
+}
+
+// ResetPassword handles password reset
+// @Summary Reset password
+// @Description Reset user's password using reset token
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body ResetPasswordRequest true "Password reset request"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} ErrorResponse
+// @Router /api/auth/reset-password [post]
+func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
+	var req ResetPasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(ErrorResponse{
+			Error: "Invalid request body",
+		})
+	}
+
+	if err := h.authService.ResetPassword(c.Context(), req.Token, req.Password); err != nil {
+		h.logger.Error("Failed to reset password", "error", err)
+		return c.Status(400).JSON(ErrorResponse{
+			Error: err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Password reset successfully",
 	})
 }

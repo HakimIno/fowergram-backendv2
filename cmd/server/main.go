@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,17 +24,11 @@ import (
 	"fowergram-backend/internal/infra/storage"
 	"fowergram-backend/internal/routes"
 	"fowergram-backend/pkg/auth"
+	"fowergram-backend/pkg/email"
 	"fowergram-backend/pkg/logger"
+	"fowergram-backend/pkg/middleware"
 	"fowergram-backend/pkg/telemetry"
 )
-
-// getEnv gets an environment variable with a fallback value
-func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
 
 func main() {
 	// Load environment variables
@@ -82,16 +77,38 @@ func main() {
 	}
 	defer msgClient.Close()
 
-	// Initialize authentication with JWT
-	userRepo := user.NewRepository(db)
-	authService := auth.NewJWTAuth(auth.JWTConfig{
-		Secret:        getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-this-in-production"),
-		AccessExpiry:  time.Hour * 1,       // 1 hour
-		RefreshExpiry: time.Hour * 24 * 30, // 30 days
-	}, userRepo)
+	// Initialize email service
+	emailService := email.NewSMTPEmailService(email.EmailConfig{
+		SMTPHost:     getEnv("SMTP_HOST", "smtp.gmail.com"),
+		SMTPPort:     getEnvAsInt("SMTP_PORT", 587),
+		SMTPUsername: getEnv("SMTP_USERNAME", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		FromEmail:    getEnv("SMTP_FROM_EMAIL", "noreply@fowergram.com"),
+		FromName:     getEnv("SMTP_FROM_NAME", "Fowergram"),
+		BaseURL:      getEnv("APP_URL", "http://localhost:3000"),
+	})
+
+	// Initialize rate limiter
+	rateLimiter := middleware.NewRateLimiter(middleware.RateLimiterConfig{
+		RedisClient: cacheClient.GetClient(),
+		MaxRequests: 5,           // 5 requests
+		Window:      time.Minute, // per minute
+	})
 
 	// Initialize repositories
+	userRepo := user.NewPostgresRepository(db)
+	verificationRepo := user.NewPostgresVerificationRepository(db)
 	postRepo := post.NewRepository(db)
+
+	// Initialize authentication with JWT
+	authService := auth.NewJWTAuth(
+		getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-this-in-production"),
+		time.Hour*1,     // 1 hour access token
+		time.Hour*24*30, // 30 days refresh token
+		userRepo,
+		verificationRepo,
+		emailService,
+	)
 
 	// Initialize services
 	userService := user.NewService(userRepo, cacheClient, authService, logger)
@@ -101,7 +118,7 @@ func main() {
 	gqlServer := graphql.NewServer(userService, postService, authService, logger)
 
 	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService, logger)
+	authHandler := handlers.NewAuthHandler(authService, emailService, logger)
 	healthHandler := handlers.NewHealthHandler(cfg.AppVersion)
 	postHandler := handlers.NewPostHandler(postService, logger)
 
@@ -122,7 +139,8 @@ func main() {
 		AuthService:    authService,
 		GQLHandler:     adaptor.HTTPHandler(gqlServer),
 		MetricsHandler: adaptor.HTTPHandler(telemetry.PrometheusHandler()),
-		AllowedOrigins: cfg.AllowedOrigins,
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "*"),
+		RateLimiter:    rateLimiter,
 	})
 
 	// Setup development routes if in development mode
@@ -147,13 +165,27 @@ func main() {
 	}()
 
 	// Start server
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8000"
-	}
-
-	logger.Info("Starting server", "port", port, "environment", cfg.Environment)
+	port := getEnv("PORT", "8000")
+	logger.Info("Starting server", "port", port)
 	if err := app.Listen(":" + port); err != nil {
-		logger.Fatal("Server failed to start", "error", err)
+		logger.Fatal("Failed to start server", "error", err)
 	}
+}
+
+// Helper function to get environment variable with default value
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
+}
+
+// Helper function to get environment variable as integer with default value
+func getEnvAsInt(key string, defaultValue int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
 }
