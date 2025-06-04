@@ -1,0 +1,250 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: fowergram-postgres
+    environment:
+      POSTGRES_DB: fowergram
+      POSTGRES_USER: fowergram
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: md5
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - fowergram-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fowergram -d fowergram"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: fowergram-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - fowergram-network
+    command: redis-server --appendonly yes --requirepass redispassword
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redispassword", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO Object Storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: fowergram-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - fowergram-network
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Create MinIO buckets
+  minio-setup:
+    image: minio/mc:latest
+    container_name: fowergram-minio-setup
+    depends_on:
+      - minio
+    networks:
+      - fowergram-network
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/fowergram --ignore-existing;
+      /usr/bin/mc anonymous set public myminio/fowergram;
+      exit 0;
+      "
+
+  # NATS Message Queue
+  nats:
+    image: nats:2.10-alpine
+    container_name: fowergram-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222" # HTTP monitoring port
+    networks:
+      - fowergram-network
+    command: ["--http_port", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/varz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # SuperTokens Core
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:7.0
+    container_name: fowergram-supertokens
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRESQL_CONNECTION_URI: "postgresql://fowergram:password@postgres:5432/fowergram"
+    ports:
+      - "3567:3567"
+    networks:
+      - fowergram-network
+    healthcheck:
+      test: >
+        bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 && echo -e "GET /hello HTTP/1.1\r\nhost: 127.0.0.1:3567\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep "Hello"'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prometheus (Monitoring)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fowergram-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - fowergram-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Grafana (Monitoring Dashboard)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: fowergram-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - fowergram-network
+    depends_on:
+      - prometheus
+
+  # Jaeger (Distributed Tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: fowergram-jaeger
+    ports:
+      - "14268:14268"
+      - "16686:16686" # Jaeger UI
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    networks:
+      - fowergram-network
+
+  # Mailhog (Email testing)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: fowergram-mailhog
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI
+    networks:
+      - fowergram-network
+
+  # Adminer (Database admin interface)
+  adminer:
+    image: adminer:latest
+    container_name: fowergram-adminer
+    ports:
+      - "8080:8080"
+    networks:
+      - fowergram-network
+    depends_on:
+      - postgres
+
+  # Application (Backend)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fowergram-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Application
+      APP_NAME: "Fowergram Backend"
+      APP_VERSION: "1.0.0"
+      ENVIRONMENT: "development"
+      PORT: "8000"
+      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001"
+      
+      # Database
+      DATABASE_URL: "postgres://fowergram:password@postgres:5432/fowergram?sslmode=disable"
+      
+      # Cache
+      REDIS_URL: "redis://:redispassword@redis:6379"
+      
+      # Storage
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_USE_SSL: "false"
+      MINIO_BUCKET: "fowergram"
+      
+      # Messaging
+      NATS_URL: "nats://nats:4222"
+      
+      # Authentication
+      SUPERTOKENS_CONNECTION_URI: "http://supertokens:3567"
+      SUPERTOKENS_API_KEY: ""
+      SUPERTOKENS_APP_NAME: "Fowergram"
+      SUPERTOKENS_WEBSITE_DOMAIN: "http://localhost:3000"
+      SUPERTOKENS_API_BASE_PATH: "/auth"
+      SUPERTOKENS_WEBSITE_BASE_PATH: "/auth"
+      
+      # Observability
+      TRACING_ENABLED: "true"
+      METRICS_ENABLED: "true"
+      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
+    networks:
+      - fowergram-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      supertokens:
+        condition: service_healthy
+
+networks:
+  fowergram-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data: 

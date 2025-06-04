@@ -1,0 +1,350 @@
+# Scalars
+scalar Time
+scalar UUID
+scalar Upload
+
+# Enums
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum NotificationType {
+  LIKE
+  COMMENT
+  FOLLOW
+  MENTION
+}
+
+enum SortOrder {
+  ASC
+  DESC
+}
+
+# Input Types
+input CreateUserInput {
+  email: String!
+  username: String!
+  fullName: String
+  bio: String
+  website: String
+}
+
+input UpdateUserInput {
+  username: String
+  fullName: String
+  bio: String
+  avatar: Upload
+  website: String
+  isPrivate: Boolean
+}
+
+input CreatePostInput {
+  caption: String
+  location: String
+  media: [Upload!]!
+  commentsDisabled: Boolean
+  likesDisabled: Boolean
+}
+
+input UpdatePostInput {
+  caption: String
+  location: String
+  commentsDisabled: Boolean
+  likesDisabled: Boolean
+}
+
+input CreateCommentInput {
+  postId: UUID!
+  content: String!
+  parentId: UUID
+}
+
+input UpdateCommentInput {
+  content: String!
+}
+
+input SearchUsersInput {
+  query: String!
+  limit: Int = 20
+  offset: Int = 0
+  verified: Boolean
+}
+
+input ListUsersInput {
+  limit: Int = 20
+  offset: Int = 0
+  sortBy: String = "created_at"
+  sortOrder: SortOrder = DESC
+  verified: Boolean
+}
+
+input PostsFilter {
+  userId: UUID
+  hashtag: String
+  location: String
+  limit: Int = 20
+  offset: Int = 0
+  sortBy: String = "created_at"
+  sortOrder: SortOrder = DESC
+}
+
+# Types
+type User {
+  id: UUID!
+  email: String!
+  username: String!
+  fullName: String
+  bio: String
+  avatar: String
+  website: String
+  isPrivate: Boolean!
+  isVerified: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+  
+  # Computed fields
+  postCount: Int!
+  followerCount: Int!
+  followingCount: Int!
+  isFollowing: Boolean!
+  isFollowedBy: Boolean!
+  isBlocked: Boolean!
+  
+  # Nested queries
+  posts(limit: Int = 20, offset: Int = 0): [Post!]!
+  followers(limit: Int = 20, offset: Int = 0): [User!]!
+  following(limit: Int = 20, offset: Int = 0): [User!]!
+}
+
+type UserProfile {
+  id: UUID!
+  username: String!
+  fullName: String
+  bio: String
+  avatar: String
+  website: String
+  isPrivate: Boolean!
+  isVerified: Boolean!
+  postCount: Int!
+  followerCount: Int!
+  followingCount: Int!
+  isFollowing: Boolean!
+  isFollowedBy: Boolean!
+  isBlocked: Boolean!
+  createdAt: Time!
+}
+
+type Post {
+  id: UUID!
+  user: User!
+  caption: String
+  location: String
+  media: [PostMedia!]!
+  isArchived: Boolean!
+  commentsDisabled: Boolean!
+  likesDisabled: Boolean!
+  likeCount: Int!
+  commentCount: Int!
+  isLiked: Boolean!
+  isSaved: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+  
+  # Nested queries
+  comments(limit: Int = 20, offset: Int = 0): [Comment!]!
+  likes(limit: Int = 20, offset: Int = 0): [User!]!
+  hashtags: [Hashtag!]!
+}
+
+type PostMedia {
+  id: UUID!
+  mediaUrl: String!
+  mediaType: MediaType!
+  thumbnailUrl: String
+  width: Int
+  height: Int
+  fileSize: Int
+  duration: Int
+  displayOrder: Int!
+  createdAt: Time!
+}
+
+type Comment {
+  id: UUID!
+  user: User!
+  post: Post!
+  parent: Comment
+  content: String!
+  likeCount: Int!
+  isLiked: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+  
+  # Nested queries
+  replies(limit: Int = 10, offset: Int = 0): [Comment!]!
+  likes(limit: Int = 20, offset: Int = 0): [User!]!
+}
+
+type Hashtag {
+  id: UUID!
+  name: String!
+  postCount: Int!
+  createdAt: Time!
+  updatedAt: Time!
+  
+  # Nested queries
+  posts(limit: Int = 20, offset: Int = 0): [Post!]!
+}
+
+type Notification {
+  id: UUID!
+  user: User!
+  actor: User
+  type: NotificationType!
+  entityType: String
+  entityId: UUID
+  message: String
+  isRead: Boolean!
+  createdAt: Time!
+}
+
+type Story {
+  id: UUID!
+  user: User!
+  mediaUrl: String!
+  mediaType: MediaType!
+  thumbnailUrl: String
+  viewCount: Int!
+  isViewed: Boolean!
+  createdAt: Time!
+  expiresAt: Time!
+  
+  # Nested queries
+  viewers(limit: Int = 20, offset: Int = 0): [User!]!
+}
+
+type Feed {
+  posts: [Post!]!
+  hasMore: Boolean!
+  nextOffset: Int
+}
+
+# Authentication Types
+type AuthResponse {
+  user: User!
+  accessToken: String!
+  refreshToken: String!
+}
+
+type MessageResponse {
+  message: String!
+  success: Boolean!
+}
+
+# Query Types
+type Query {
+  # Authentication
+  me: User
+  
+  # Users
+  user(id: UUID, username: String): UserProfile
+  users(input: ListUsersInput!): [User!]!
+  searchUsers(input: SearchUsersInput!): [User!]!
+  
+  # Posts
+  post(id: UUID!): Post
+  posts(filter: PostsFilter!): [Post!]!
+  feed(limit: Int = 20, offset: Int = 0): Feed!
+  explorePosts(limit: Int = 20, offset: Int = 0): [Post!]!
+  
+  # Comments
+  comment(id: UUID!): Comment
+  postComments(postId: UUID!, limit: Int = 20, offset: Int = 0): [Comment!]!
+  
+  # Hashtags
+  hashtag(name: String!): Hashtag
+  trendingHashtags(limit: Int = 10): [Hashtag!]!
+  
+  # Notifications
+  notifications(limit: Int = 20, offset: Int = 0): [Notification!]!
+  unreadNotificationCount: Int!
+  
+  # Stories
+  stories: [Story!]!
+  userStories(userId: UUID!): [Story!]!
+  
+  # Social
+  followers(userId: UUID!, limit: Int = 20, offset: Int = 0): [User!]!
+  following(userId: UUID!, limit: Int = 20, offset: Int = 0): [User!]!
+  
+  # Search
+  search(query: String!, limit: Int = 20, offset: Int = 0): SearchResult!
+}
+
+# Mutation Types
+type Mutation {
+  # Authentication
+  signUp(email: String!, password: String!, username: String!): AuthResponse!
+  signIn(email: String!, password: String!): AuthResponse!
+  signOut: MessageResponse!
+  refreshToken(refreshToken: String!): AuthResponse!
+  sendPasswordResetEmail(email: String!): MessageResponse!
+  resetPassword(token: String!, newPassword: String!): MessageResponse!
+  
+  # User Management
+  updateProfile(input: UpdateUserInput!): User!
+  deleteAccount: MessageResponse!
+  
+  # Posts
+  createPost(input: CreatePostInput!): Post!
+  updatePost(id: UUID!, input: UpdatePostInput!): Post!
+  deletePost(id: UUID!): MessageResponse!
+  archivePost(id: UUID!): Post!
+  unarchivePost(id: UUID!): Post!
+  
+  # Interactions
+  likePost(postId: UUID!): MessageResponse!
+  unlikePost(postId: UUID!): MessageResponse!
+  savePost(postId: UUID!): MessageResponse!
+  unsavePost(postId: UUID!): MessageResponse!
+  
+  # Comments
+  createComment(input: CreateCommentInput!): Comment!
+  updateComment(id: UUID!, input: UpdateCommentInput!): Comment!
+  deleteComment(id: UUID!): MessageResponse!
+  likeComment(commentId: UUID!): MessageResponse!
+  unlikeComment(commentId: UUID!): MessageResponse!
+  
+  # Social
+  followUser(userId: UUID!): MessageResponse!
+  unfollowUser(userId: UUID!): MessageResponse!
+  blockUser(userId: UUID!): MessageResponse!
+  unblockUser(userId: UUID!): MessageResponse!
+  
+  # Stories
+  createStory(media: Upload!, mediaType: MediaType!): Story!
+  deleteStory(id: UUID!): MessageResponse!
+  viewStory(id: UUID!): MessageResponse!
+  
+  # Notifications
+  markNotificationAsRead(id: UUID!): MessageResponse!
+  markAllNotificationsAsRead: MessageResponse!
+  
+  # Admin
+  verifyUser(userId: UUID!): MessageResponse!
+  unverifyUser(userId: UUID!): MessageResponse!
+}
+
+# Subscription Types
+type Subscription {
+  # Real-time updates
+  postLiked(postId: UUID!): User!
+  postCommented(postId: UUID!): Comment!
+  userFollowed(userId: UUID!): User!
+  newNotification(userId: UUID!): Notification!
+  storyViewed(storyId: UUID!): User!
+}
+
+# Union Types
+union SearchResult = User | Post | Hashtag 
